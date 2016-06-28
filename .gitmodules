@@ -1,0 +1,3 @@
+[submodule "src/loam_velodyne"]
+	path = src/loam_velodyne
+	url = https://github.com/azaganidis/loam_velodyne.git
