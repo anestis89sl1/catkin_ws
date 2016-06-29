@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   tf
+  rosbag
 )
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 ## System dependencies are found with CMake's conventions
@@ -28,7 +29,7 @@ include_directories(
 	${PCL_INCLUDE_DIRS})
 link_directories ( ${Boost_LIBRARY_DIRS} )
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs
+  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs rosbag
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS include
 )
@@ -61,6 +62,9 @@ set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 0.2.7)
 
 add_executable(An_scanRegistration src/scanRegistration.cpp)
 target_link_libraries(An_scanRegistration ${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
+
+add_executable(An_genetic src/genetic.cpp)
+target_link_libraries(An_genetic ${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
 add_executable(An_laserOdometry src/laserOdometry.cpp)
 target_link_libraries(An_laserOdometry ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})

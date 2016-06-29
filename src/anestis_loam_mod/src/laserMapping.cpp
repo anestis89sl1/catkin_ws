@@ -46,6 +46,12 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 
+#include "std_msgs/MultiArrayLayout.h"
+#include "std_msgs/MultiArrayDimension.h"
+#include "std_msgs/Float32MultiArray.h"
+void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array) { ros::shutdown(); }
+
+
 const float scanPeriod = 0.1;
 
 const int stackFrameNum = 1;
@@ -334,6 +340,7 @@ void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn)
   imuPitch[imuPointerLast] = pitch;
 }
 
+
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "laserMapping");
@@ -341,6 +348,8 @@ int main(int argc, char** argv)
 
   ros::Subscriber subLaserCloudCornerLast = nh.subscribe<sensor_msgs::PointCloud2>
                                             ("/laser_cloud_corner_last", 2, laserCloudCornerLastHandler);
+
+  ros::Subscriber subFeatParams = nh.subscribe<std_msgs::Float32MultiArray> ("/SUREparams", 5, paramHandler);
 
   ros::Subscriber subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>
                                           ("/laser_cloud_surf_last", 2, laserCloudSurfLastHandler);

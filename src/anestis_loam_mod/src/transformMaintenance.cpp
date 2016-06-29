@@ -46,6 +46,11 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 
+#include "std_msgs/MultiArrayLayout.h"
+#include "std_msgs/MultiArrayDimension.h"
+#include "std_msgs/Float32MultiArray.h"
+void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array) { ros::shutdown(); }
+
 float transformSum[6] = {0};
 float transformIncre[6] = {0};
 float transformMapped[6] = {0};
@@ -212,6 +217,7 @@ int main(int argc, char** argv)
 
   ros::Subscriber subOdomAftMapped = nh.subscribe<nav_msgs::Odometry> 
                                      ("/aft_mapped_to_init", 5, odomAftMappedHandler);
+  ros::Subscriber subFeatParams = nh.subscribe<std_msgs::Float32MultiArray> ("/SUREparams", 5, paramHandler);
 
   ros::Publisher pubLaserOdometry2 = nh.advertise<nav_msgs::Odometry> ("/integrated_to_init", 5);
   pubLaserOdometry2Pointer = &pubLaserOdometry2;

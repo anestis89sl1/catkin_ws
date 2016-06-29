@@ -48,12 +48,16 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
+#include "std_msgs/MultiArrayLayout.h"
+#include "std_msgs/MultiArrayDimension.h"
+#include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/Int16.h"
 
 using std::sin;
 using std::cos;
 using std::atan2;
 
-float featureSize(0.162872),featureSamplingRate(0.346602),normalSamplingRate(0.68362),normalsScale(0.412843),minimumCornerness(0.010802);
+float featureSize(1.2),featureSamplingRate(0.4),normalSamplingRate(0.05),normalsScale(0.15),minimumCornerness(0.10802);
 
 const double scanPeriod = 0.1;
 
@@ -101,6 +105,60 @@ float imuShiftZ[imuQueLength] = {0};
 ros::Publisher pubLaserCloud;
 ros::Publisher pubInterestPoints;
 ros::Publisher pubImuTrans;
+ros::Publisher pubFeatureNum;
+
+sure::SURE_Estimator<pcl::PointXYZRGB> sureE;
+sure::Configuration config;
+
+void init()
+{
+    systemInitCount = 0;
+    systemInited = false;
+
+    imuPointerFront = 0;
+    imuPointerLast = -1;
+
+    imuRollStart = 0; imuPitchStart = 0; imuYawStart = 0;
+    imuRollCur = 0; imuPitchCur = 0; imuYawCur = 0;
+
+    imuVeloXStart = 0; imuVeloYStart = 0; imuVeloZStart = 0;
+    imuShiftXStart = 0; imuShiftYStart = 0; imuShiftZStart = 0;
+
+    imuVeloXCur = 0; imuVeloYCur = 0; imuVeloZCur = 0;
+    imuShiftXCur = 0; imuShiftYCur = 0; imuShiftZCur = 0;
+
+    imuShiftFromStartXCur = 0; imuShiftFromStartYCur = 0; imuShiftFromStartZCur = 0;
+    imuVeloFromStartXCur = 0; imuVeloFromStartYCur = 0; imuVeloFromStartZCur = 0;
+
+    std::fill(imuTime, imuTime+imuQueLength-1,0);
+    std::fill(imuRoll,imuRoll+imuQueLength-1,0);
+    std::fill(imuPitch,imuPitch+imuQueLength-1,0);
+    std::fill(imuYaw,imuYaw+imuQueLength-1,0);
+    std::fill(imuAccX,imuAccX+imuQueLength-1,0);
+    std::fill(imuAccY,imuAccY+imuQueLength-1,0);
+    std::fill(imuAccZ,imuAccZ+imuQueLength-1,0);
+    std::fill(imuVeloX,imuVeloX+imuQueLength-1,0);
+    std::fill(imuVeloY,imuVeloY+imuQueLength-1,0);
+    std::fill(imuVeloZ,imuVeloZ+imuQueLength-1,0);
+    std::fill(imuShiftX,imuShiftX+imuQueLength-1,0);
+    std::fill(imuShiftY,imuShiftY+imuQueLength-1,0);
+    std::fill(imuShiftZ,imuShiftZ+imuQueLength-1,0);
+    // Adjust the size of the features (in meter)
+    config.setSize( featureSize); 
+    // Adjust the sampling rate
+    config.setSamplingRate(featureSamplingRate); 
+    // Adjust the normal sampling rate
+    config.setNormalSamplingRate(normalSamplingRate); 
+    // Adjust the influence radius for calculating normals
+    config.setNormalsScale(normalsScale); 
+    // Adjust the minimum Cornerness to reduce number of features on edges
+    config.setMinimumCornerness(minimumCornerness); 
+    // config.setEntropyCalculationMode(sure::CROSSPRODUCTS_ALL_NORMALS_PAIRWISE); 
+    // set altered configuration
+    sureE.setConfig(config); 
+    
+
+}
 
 void ShiftToStartIMU(float pointTime)
 {
@@ -346,28 +404,15 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     }
     int scanCount = -1;
 
-    sure::SURE_Estimator<pcl::PointXYZRGB> sure;
-    sure.setInputCloud(laserCloud);
-    sure::Configuration config;
-    // Adjust the size of the features (in meter)
-    config.setSize( featureSize); 
-    // Adjust the sampling rate
-    config.setSamplingRate(featureSamplingRate); 
-    // Adjust the normal sampling rate
-    config.setNormalSamplingRate(normalSamplingRate); 
-    // Adjust the influence radius for calculating normals
-    config.setNormalsScale(normalsScale); 
-    // Adjust the minimum Cornerness to reduce number of features on edges
-    config.setMinimumCornerness(minimumCornerness); 
-    // config.setEntropyCalculationMode(sure::CROSSPRODUCTS_ALL_NORMALS_PAIRWISE); 
-    // set altered configuration
-    sure.setConfig(config); 
+    sureE.setInputCloud(laserCloud);
     // calculate features
-    sure.calculateFeatures(); 
+    sureE.calculateFeatures(); 
     pcl::PointCloud<pcl::InterestPoint>::Ptr features;
-    features = sure.getInterestPoints();
+    features = sureE.getInterestPoints();
     pcl::PointCloud<PointType> featureCloud;
-      ROS_ERROR("%lu,",features->points.size() );
+    std_msgs::Int16 featureNum;
+    featureNum.data=features->points.size();
+    pubFeatureNum.publish(featureNum);
 
 
     for(pcl::PointCloud<pcl::InterestPoint>::const_iterator it=features->points.begin(); it != features->points.end(); ++it)
@@ -389,11 +434,15 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     laserCloudOutMsg.fields[3].name="intensity";
     pubLaserCloud.publish(laserCloudOutMsg);
 
-    sensor_msgs::PointCloud2 interestPointsMsg;
-    pcl::toROSMsg(featureCloud,  interestPointsMsg);
-    interestPointsMsg.header.stamp = laserCloudMsg->header.stamp;
-    interestPointsMsg.header.frame_id = "/camera";
-    pubInterestPoints.publish(interestPointsMsg);
+    if(featureCloud.size()>8)
+    {
+
+        sensor_msgs::PointCloud2 interestPointsMsg;
+        pcl::toROSMsg(featureCloud,  interestPointsMsg);
+        interestPointsMsg.header.stamp = laserCloudMsg->header.stamp;
+        interestPointsMsg.header.frame_id = "/camera";
+        pubInterestPoints.publish(interestPointsMsg);
+    }
 
     pcl::PointCloud<pcl::PointXYZ> imuTrans(4, 1);
     imuTrans.points[0].x = imuPitchStart;
@@ -442,6 +491,17 @@ void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn)
 
   AccumulateIMUShift();
 }
+void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array)
+{
+    featureSize=array->data[0];
+    featureSamplingRate=array->data[1];
+    normalsScale=array->data[2];
+    normalSamplingRate=array->data[3];
+    minimumCornerness=array->data[4];
+    init();
+
+
+}
 
 int main(int argc, char** argv)
 {
@@ -456,10 +516,13 @@ int main(int argc, char** argv)
   ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2> 
                                   ("/velodyne_points", 2, laserCloudHandler);
 
+  ros::Subscriber subFeatParams = nh.subscribe<std_msgs::Float32MultiArray> ("/SUREparams", 5, paramHandler);
+
   ros::Subscriber subImu = nh.subscribe<sensor_msgs::Imu> ("/imu/data", 50, imuHandler);
 
   pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>
                                  ("/velodyne_cloud_2", 2);
+    pubFeatureNum= nh.advertise<std_msgs::Int16> ("/stoper", 1);
 
   pubInterestPoints = nh.advertise<sensor_msgs::PointCloud2> ("/laser_interest", 2);
 
