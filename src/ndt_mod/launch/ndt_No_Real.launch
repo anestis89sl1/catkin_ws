@@ -1,0 +1,19 @@
+<launch>
+	<arg name="rviz" default="true" />
+	<param name="use_sim_time" value="false" />
+	<arg name="datGen" value="false" />
+
+	<node pkg="ndt_mod" type="scanFixWithIMU" name="scanFixWithIMU" output="screen"/>
+	<group if="$(arg datGen)">
+		<node pkg="ndt_mod" type="notRealtime" name="notRealtime" output="screen" respawn="true"/>
+	</group>
+	<node pkg="ndt_mod" type="mappingNDT" name="mappingNDT" output="screen" respawn="true"/>
+	<node pkg="ndt_mod" type="transformMaintenanceNDT" name="transformMaintenanceNDT" output="screen" respawn="true"/>
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find ndt_mod)/rviz_cfg/loam_velodyne.rviz" /> </group>
+
+  <node pkg="tf" type="static_transform_publisher" name="static_transform_publisher3" args="0 0 0 0 0 1.5  world camera_init 50"/>
+
+
+</launch>
