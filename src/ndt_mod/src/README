@@ -1,0 +1,11 @@
+notRealtime.cpp
+	Reads bag and send to registration, and waits for reply. 
+	offline registration, using NDT_D2D, running slow, wastes ram. Cant run with captured data pcap, only converted from velodyne_packets to velodyne_points(PointCloud2)
+
+laserOdometry.cpp
+	same as above but try to run realtime. The reading of data is not handled by this, but seperate rosbag play.
+
+laserOdometryOM.cpp
+	builds occupancy map, try the last version of ndt_map package. receives data from registration, which receives from rosbag play. 
+
+

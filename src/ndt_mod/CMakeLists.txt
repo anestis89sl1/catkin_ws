@@ -12,7 +12,9 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   ndt_registration
+  ndt_map
   std_msgs
+  velodyne_msgs
   tf
   rosbag
 )
@@ -34,6 +36,8 @@ link_directories ( ${Boost_LIBRARY_DIRS} )
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs rosbag
   ndt_registration
+  ndt_map
+  velodyne_msgs
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS include
 )
@@ -72,6 +76,9 @@ target_link_libraries(laserOdometryNDT ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${Op
 
 add_executable(notRealtime src/notRealtime.cpp)
 target_link_libraries(notRealtime ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
+
+add_executable(laserOdometryOM src/laserOdometryOM.cpp)
+target_link_libraries(laserOdometryOM ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
 add_executable(mappingNDT src/laserMapping.cpp)
 target_link_libraries(mappingNDT ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})
