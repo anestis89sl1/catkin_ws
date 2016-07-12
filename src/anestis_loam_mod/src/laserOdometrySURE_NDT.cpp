@@ -34,7 +34,6 @@
 
 #include <anestis_loam_mod/common.h>
 #include <nav_msgs/Odometry.h>
-#include <rosgraph_msgs/Clock.h>
 #include <opencv/cv.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -45,7 +44,6 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <velodyne_msgs/VelodyneScan.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_listener.h>
@@ -53,29 +51,28 @@
 #include "std_msgs/MultiArrayLayout.h"
 #include "std_msgs/MultiArrayDimension.h"
 #include "std_msgs/Float32MultiArray.h"
-#include <ndt_registration/ndt_matcher_d2d.h>
-#include <ndt_map/pointcloud_utils.h>
-#include <rosbag/bag.h>
-#include <rosbag/view.h>
-#include <boost/foreach.hpp>
-
 
 void run();
 const float scanPeriod = 0.1;
 
+const int skipFrameNum = 1;
 bool systemInited = false;
 
+double timeInterestPoints= 0;
 double timeLaserCloudFullRes = 0;
 double timeImuTrans = 0;
 
+bool newInterestPoints= false;
 bool newLaserCloudFullRes = false;
 bool newImuTrans = false;
 bool reset=false;
 
+pcl::PointCloud<PointType>::Ptr interestPoints(new pcl::PointCloud<PointType>());
+pcl::PointCloud<PointType>::Ptr interestPointsLast(new pcl::PointCloud<PointType>());
 pcl::PointCloud<PointType>::Ptr laserCloudFullRes(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr laserCloudFullResLast(new pcl::PointCloud<PointType>());
 pcl::PointCloud<pcl::PointXYZ>::Ptr imuTrans(new pcl::PointCloud<pcl::PointXYZ>());
 
+int interestPointsLastNum;
 
 
 
@@ -145,10 +142,21 @@ void PluginIMURotation(float bcx, float bcy, float bcz, float blx, float bly, fl
   acz = atan2(srzcrx / cos(acx), crzcrx / cos(acx));
 }
 
+void laserCloudInterestHandler(const sensor_msgs::PointCloud2ConstPtr& interestPoints2)
+{
+	timeInterestPoints = interestPoints2->header.stamp.toSec();
+    interestPoints->clear();
+
+    pcl::fromROSMsg(*interestPoints2, *interestPoints);
+    std::vector<int> indices;
+    pcl::removeNaNFromPointCloud(*interestPoints,*interestPoints, indices);
+    newInterestPoints= true;
+}
+
+
 void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudFullRes2)
 {
   timeLaserCloudFullRes = laserCloudFullRes2->header.stamp.toSec();
-  (*laserCloudFullResLast)+=(*laserCloudFullRes);
 
   laserCloudFullRes->clear();
   pcl::fromROSMsg(*laserCloudFullRes2, *laserCloudFullRes);
@@ -184,27 +192,28 @@ void imuTransHandler(const sensor_msgs::PointCloud2ConstPtr& imuTrans2)
 }
 
 void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array) { ros::shutdown(); }
-#define velodyne
 
 int main(int argc, char** argv)
 {
 	ros::init(argc, argv, "laserOdometry");
 	ros::NodeHandle nh;
 
-	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>
-		("/velodyne_cloud_2", 2, laserCloudFullResHandler);
+	ros::Subscriber subInterestPoints = nh.subscribe<sensor_msgs::PointCloud2>
+										 ("/laser_interest", 2, laserCloudInterestHandler);
 
-	ros::Subscriber subImuTrans = nh.subscribe<sensor_msgs::PointCloud2> ("/imu_trans", 5, imuTransHandler);
+	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2> 
+										 ("/velodyne_cloud_2", 2, laserCloudFullResHandler);
 
+	ros::Subscriber subImuTrans = nh.subscribe<sensor_msgs::PointCloud2> 
+								("/imu_trans", 5, imuTransHandler);
 
-	ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2> ("/velodyne_cloud_3", 2);
+	ros::Subscriber subFeatParams = nh.subscribe<std_msgs::Float32MultiArray> ("/SUREparams", 5, paramHandler);
 
-	#ifdef velodyne
-	ros::Publisher pubVelodyne = nh.advertise<velodyne_msgs::VelodyneScan> ("/velodyne_packets", 2);
-	#else
-	ros::Publisher pubVelodyne = nh.advertise<sensor_msgs::PointCloud2> ("/velodyne_points", 2);
-	#endif
-	//ros::Publisher pubClock = nh.advertise<rosgraph_msgs::Clock> ("/clock", 2);
+	ros::Publisher pubInterestPointsLast = nh.advertise<sensor_msgs::PointCloud2>
+										   ("/laser_interest_last", 2);
+
+	ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2> 
+										("/velodyne_cloud_3", 2);
 
 	ros::Publisher pubLaserOdometry = nh.advertise<nav_msgs::Odometry> ("/laser_odom_to_init", 5);
 	nav_msgs::Odometry laserOdometry;
@@ -217,144 +226,150 @@ int main(int argc, char** argv)
 	laserOdometryTrans.child_frame_id_ = "/laser_odom";
 
 
-	double res[]={16,8,4,2,1,0.5};
-	int numRep=-1;
-	int frameSkip=1;
-	if(argc>1)res[0]=atof(argv[1]);
-	if(argc>2)frameSkip=atoi(argv[2]);
-	if(argc>3) numRep=atoi(argv[3]);
 
-	int frameCount = 0;
+
+	int frameCount = skipFrameNum;
 	ros::Rate rate(100);
-	ros::Rate rate1(0.1);
 	bool status = ros::ok();
-	rosbag::Bag bag;
-	bag.open("/home/anestis/velodyne2.bag", rosbag::bagmode::Read);
-    std::vector<std::string> topics;
-	#ifdef velodyne
-    topics.push_back(std::string("velodyne_packets"));
-	#else
-    topics.push_back(std::string("velodyne_points"));
-	#endif
-    rosbag::View view(bag, rosbag::TopicQuery(topics));
-	rate1.sleep();
-			std::cout<<"here1"<<std::endl;
-	int counter1=0;
-	BOOST_FOREACH(rosbag::MessageInstance const m, view)
-	{
-	#ifdef velodyne
-		velodyne_msgs::VelodyneScan::ConstPtr velodynePointMSG= m.instantiate<velodyne_msgs::VelodyneScan>();
-	#else
-		sensor_msgs::PointCloud2::ConstPtr velodynePointMSG= m.instantiate<sensor_msgs::PointCloud2>();
-	#endif
-		pubVelodyne.publish(velodynePointMSG);
-		rosgraph_msgs::Clock timeNow;
-		timeNow.clock= velodynePointMSG->header.stamp;
-		//pubClock.publish(timeNow);
-		//rate1.sleep();
-		
-		int kli=0;
-		while(kli<100&&ros::ok()&&!(newLaserCloudFullRes&&newImuTrans))
+	while (status) {
+		ros::spinOnce();
+
+		if (newInterestPoints && newLaserCloudFullRes && newImuTrans &&
+			fabs(timeLaserCloudFullRes - timeInterestPoints) < 0.005 &&
+			fabs(timeImuTrans - timeInterestPoints) < 0.005) 
 		{
-			ros::spinOnce();
-			kli++;
-			rate.sleep();
+			newInterestPoints = false;
+			newLaserCloudFullRes = false;
+			newImuTrans = false;
+			if (!systemInited) 
+			{
+				pcl::PointCloud<PointType>::Ptr laserCloudTemp = interestPoints;
+				interestPoints = interestPointsLast;
+				interestPointsLast = laserCloudTemp;
+
+				sensor_msgs::PointCloud2 interestPointsLast2;
+				pcl::toROSMsg(*interestPointsLast, interestPointsLast2);
+				interestPointsLast2.header.stamp = ros::Time().fromSec(timeInterestPoints);
+				interestPointsLast2.header.frame_id = "/camera";
+				pubInterestPointsLast.publish(interestPointsLast2);
+
+
+				systemInited = true;
+				continue;
+			}
+
+			int InterestPointsNum = interestPoints->points.size();
+			int InterestPointsLNum = interestPointsLast->points.size();
+			if(InterestPointsNum<9||InterestPointsLNum<9)continue;
+
+		     ////ICP
+			pcl::IterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> icp;
+			icp.setInputSource(interestPointsLast);
+			icp.setInputTarget(interestPoints);
+
+			// Set the max correspondence distance to 5cm 
+			// (e.g., correspondences with higher distances will be ignored)
+			//icp.setMaxCorrespondenceDistance (0.05);
+			// Set the maximum number of iterations (criterion 1)
+			icp.setMaximumIterations (50);
+			// Set the transformation epsilon (criterion 2)
+			//icp.setTransformationEpsilon (1e-8);
+			// Set the euclidean distance difference epsilon (criterion 3)
+			//icp.setEuclideanFitnessEpsilon (1);
+
+
+
+
+
+			//for(int i=0;i<InterestPointsNum;i++)
+			//	std::cout<<interestPoints->points[i]<<std::endl;
+			pcl::PointCloud<pcl::PointXYZI> Final;
+			icp.align(Final);
+			Eigen::Matrix4f Tm=icp.getFinalTransformation();
+			////ICP
+			tf::Matrix3x3 tf3d;
+			tf3d.setValue(
+					static_cast<double>(Tm(0,0)), static_cast<double>(Tm(0,1)), static_cast<double>(Tm(0,2)), 
+					static_cast<double>(Tm(1,0)), static_cast<double>(Tm(1,1)), static_cast<double>(Tm(1,2)), 
+					static_cast<double>(Tm(2,0)), static_cast<double>(Tm(2,1)), static_cast<double>(Tm(2,2))
+					);
+
+			tf::Quaternion tfqt;
+			tf::Vector3 origin;
+			origin.setValue(
+					static_cast<double>(Tm(0,3)),
+					static_cast<double>(Tm(1,3)),
+					static_cast<double>(Tm(2,3)));
+			tf3d.getRotation(tfqt);
+			laserOdometryTrans.setOrigin(origin);
+			laserOdometryTrans.setRotation(tfqt);
+			laserOdometryTrans.stamp_ = ros::Time().fromSec(timeInterestPoints);
+			tfBroadcaster.sendTransform(laserOdometryTrans);
+
+			double rxd, ryd, rzd;
+			float tx, ty, tz;
+			//float rx, ry, rz, tx, ty, tz;
+			tf3d.getRPY(rxd,ryd,rzd);
+			tx= static_cast<float>(Tm(0,3));
+			ty= static_cast<float>(Tm(1,3));
+			tz= static_cast<float>(Tm(2,3));
+
+			pcl::transformPointCloud(*interestPoints,*interestPointsLast, Tm);
+			pcl::transformPointCloud(*laserCloudFullRes,*laserCloudFullRes,Tm);
+
+
+			geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(rzd, -rxd, -ryd);
+
+			laserOdometry.header.stamp = ros::Time().fromSec(timeInterestPoints);
+			laserOdometry.pose.pose.orientation.x = -geoQuat.y;
+			laserOdometry.pose.pose.orientation.y = -geoQuat.z;
+			laserOdometry.pose.pose.orientation.z = geoQuat.x;
+			laserOdometry.pose.pose.orientation.w = geoQuat.w;
+			laserOdometry.pose.pose.position.x = tx;
+			laserOdometry.pose.pose.position.y = ty;
+			laserOdometry.pose.pose.position.z = tz;
+			pubLaserOdometry.publish(laserOdometry);
+
+			/*
+			//////////////// 
+			InterestPointsNum = interestPoints->points.size();
+			///////////////
+			frameCount++;
+			
+			if (frameCount >= skipFrameNum + 1) {
+				int laserCloudFullResNum = laserCloudFullRes->points.size();
+				for (int i = 0; i < laserCloudFullResNum; i++) 
+				{
+					TransformToEnd(&laserCloudFullRes->points[i], &laserCloudFullRes->points[i]);
+				}
+			}
+
+			pcl::PointCloud<PointType>::Ptr laserCloudTemp =interestPoints;
+			interestPoints= interestPointsLast;
+			interestPointsLast= laserCloudTemp;
+			*/
+
+			interestPointsLastNum = interestPointsLast->points.size();
+
+			if (frameCount >= skipFrameNum + 1) 
+			{
+				frameCount = 0;
+
+				sensor_msgs::PointCloud2 interestPointsLast2;
+				pcl::toROSMsg(*interestPointsLast, interestPointsLast2);
+				interestPointsLast2.header.stamp = ros::Time().fromSec(timeInterestPoints);
+				interestPointsLast2.header.frame_id = "/camera";
+				pubInterestPointsLast.publish(interestPointsLast2);
+
+				sensor_msgs::PointCloud2 laserCloudFullRes3;
+				pcl::toROSMsg(*laserCloudFullRes, laserCloudFullRes3);
+				laserCloudFullRes3.header.stamp = ros::Time().fromSec(timeInterestPoints);
+				laserCloudFullRes3.header.frame_id = "/camera";
+				pubLaserCloudFullRes.publish(laserCloudFullRes3);
+			}
 		}
-		if(!(newLaserCloudFullRes&&newImuTrans))
-			continue;
-
-		if(counter1++>numRep&&numRep>0)break;
-		if(frameSkip>1&&counter1%frameSkip)continue;
-		newLaserCloudFullRes = false;
-		newImuTrans = false;
-
-
-		if (!systemInited) 
-		{
-			pcl::PointCloud<PointType>::Ptr laserCloudTemp = laserCloudFullRes;
-			laserCloudFullRes = laserCloudFullResLast;
-			laserCloudFullResLast = laserCloudTemp;
-
-			sensor_msgs::PointCloud2 interestPointsLast2;
-			pcl::toROSMsg(*laserCloudFullResLast, interestPointsLast2);
-			interestPointsLast2.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
-			interestPointsLast2.header.frame_id = "/camera";
-			pubLaserCloudFullRes.publish(interestPointsLast2);
-
-			systemInited = true;
-			continue;
-		}
-
-		int laserCloudFullResNum = laserCloudFullRes->points.size();
-		int laserCloudFullResLNum = laserCloudFullResLast->points.size();
-		///////NDT
-		std::vector<double>resolutions (res,res+sizeof(res)/sizeof(double));
-		//lslgeneric::NDTMatcherD2D <pcl::PointXYZ,pcl::PointXYZ> matcherD2D (false,false,resolutions);
-
-		lslgeneric::NDTMatcherD2D matcherD2D (false,false,resolutions);
-		Eigen::Transform<double,3,Eigen::Affine,Eigen::ColMajor> T;
-		///bad part
-		
-		pcl::PointCloud<pcl::PointXYZ> cloudOld, cloudNew;
-		copyPointCloud(*laserCloudFullResLast,cloudOld);
-		copyPointCloud(*laserCloudFullRes,cloudNew);
-
-		std::cout<<"c"<<std::endl;
-		bool ret = matcherD2D.match(cloudOld,cloudNew,T);
-		std::cout<<"d"<<std::endl;
-
-		copyPointCloud(cloudOld,*laserCloudFullResLast);
-		copyPointCloud(cloudNew,*laserCloudFullRes);
-
-		//bad part/
-
-		lslgeneric::transformPointCloudInPlace<pcl::PointXYZI>(T,*laserCloudFullRes);
-
-		tf::Matrix3x3 tf3d;
-		tf3d.setValue(
-			static_cast<double>(T(0,0)), static_cast<double>(T(0,1)), static_cast<double>(T(0,2)), 
-			static_cast<double>(T(1,0)), static_cast<double>(T(1,1)), static_cast<double>(T(1,2)), 
-			static_cast<double>(T(2,0)), static_cast<double>(T(2,1)), static_cast<double>(T(2,2)));
-
-		tf::Quaternion tfqt;
-		tf::Vector3 origin;
-		origin.setValue(
-			static_cast<double>(T.translation().transpose()[0]),
-			static_cast<double>(T.translation().transpose()[1]),
-			static_cast<double>(T.translation().transpose()[2]));
-		tf3d.getRotation(tfqt);
-		laserOdometryTrans.setOrigin(origin);
-		laserOdometryTrans.setRotation(tfqt);
-		laserOdometryTrans.stamp_ = ros::Time().fromSec(timeLaserCloudFullRes );
-		tfBroadcaster.sendTransform(laserOdometryTrans);
-
-		double rxd, ryd, rzd;
-		float tx, ty, tz;
-		//float rx, ry, rz, tx, ty, tz;
-		tf3d.getRPY(rxd,ryd,rzd);
-		tx= static_cast<float>(T(0,3));
-		ty= static_cast<float>(T(1,3));
-		tz= static_cast<float>(T(2,3));
-
-
-		geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(rzd, -rxd, -ryd);
-
-		laserOdometry.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes );
-		laserOdometry.pose.pose.orientation.x = -geoQuat.y;
-		laserOdometry.pose.pose.orientation.y = -geoQuat.z;
-		laserOdometry.pose.pose.orientation.z = geoQuat.x;
-		laserOdometry.pose.pose.orientation.w = geoQuat.w;
-		laserOdometry.pose.pose.position.x = tx;
-		laserOdometry.pose.pose.position.y = ty;
-		laserOdometry.pose.pose.position.z = tz;
-		pubLaserOdometry.publish(laserOdometry);
-
-
-		sensor_msgs::PointCloud2 laserCloudFullRes3;
-		pcl::toROSMsg(*laserCloudFullRes, laserCloudFullRes3);
-		laserCloudFullRes3.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
-		laserCloudFullRes3.header.frame_id = "/camera";
-		pubLaserCloudFullRes.publish(laserCloudFullRes3);
+		status = ros::ok();
+		rate.sleep();
 	}
 	return 0;
 }

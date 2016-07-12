@@ -29,12 +29,20 @@
 // This is an implementation of the algorithm described in the following paper:
 //   J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time.
 //     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014.
+//
+//
+//
+//
+//
+//
+//
+//     IMPORTANT NOTE
+//     currently no fusing between signals of odometry and IMU. If both signals are available
+//     the calculation will fail. Needs adaptation
 
 #include <cmath>
 #include <vector>
 
-#include <anestis_loam_mod/common.h>
-#include <sure/sure_estimator.h>
 #include <opencv/cv.h>
 #include <nav_msgs/Odometry.h>
 #include <opencv/cv.h>
@@ -48,16 +56,10 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
-#include "std_msgs/MultiArrayLayout.h"
-#include "std_msgs/MultiArrayDimension.h"
-#include "std_msgs/Float32MultiArray.h"
-#include "std_msgs/Int16.h"
 
 using std::sin;
 using std::cos;
 using std::atan2;
-
-float featureSize(1.2),featureSamplingRate(0.4),normalSamplingRate(0.05),normalsScale(0.15),minimumCornerness(0.10802);
 
 const double scanPeriod = 0.1;
 
@@ -90,10 +92,6 @@ float imuRoll[imuQueLength] = {0};
 float imuPitch[imuQueLength] = {0};
 float imuYaw[imuQueLength] = {0};
 
-float imuAccX[imuQueLength] = {0};
-float imuAccY[imuQueLength] = {0};
-float imuAccZ[imuQueLength] = {0};
-
 float imuVeloX[imuQueLength] = {0};
 float imuVeloY[imuQueLength] = {0};
 float imuVeloZ[imuQueLength] = {0};
@@ -103,12 +101,11 @@ float imuShiftY[imuQueLength] = {0};
 float imuShiftZ[imuQueLength] = {0};
 
 ros::Publisher pubLaserCloud;
-ros::Publisher pubInterestPoints;
 ros::Publisher pubImuTrans;
-ros::Publisher pubFeatureNum;
 
-sure::SURE_Estimator<pcl::PointXYZRGB> sureE;
-sure::Configuration config;
+float imuAccX[imuQueLength] = {0};
+float imuAccY[imuQueLength] = {0};
+float imuAccZ[imuQueLength] = {0};
 
 void init()
 {
@@ -143,20 +140,6 @@ void init()
     std::fill(imuShiftX,imuShiftX+imuQueLength-1,0);
     std::fill(imuShiftY,imuShiftY+imuQueLength-1,0);
     std::fill(imuShiftZ,imuShiftZ+imuQueLength-1,0);
-    // Adjust the size of the features (in meter)
-    config.setSize( featureSize); 
-    // Adjust the sampling rate
-    config.setSamplingRate(featureSamplingRate); 
-    // Adjust the normal sampling rate
-    config.setNormalSamplingRate(normalSamplingRate); 
-    // Adjust the influence radius for calculating normals
-    config.setNormalsScale(normalsScale); 
-    // Adjust the minimum Cornerness to reduce number of features on edges
-    config.setMinimumCornerness(minimumCornerness); 
-    // config.setEntropyCalculationMode(sure::CROSSPRODUCTS_ALL_NORMALS_PAIRWISE); 
-    // set altered configuration
-    sureE.setConfig(config); 
-    
 
 }
 
@@ -238,7 +221,6 @@ void AccumulateIMUShift()
   float x1 = cos(roll) * accX - sin(roll) * accY;
   float y1 = sin(roll) * accX + cos(roll) * accY;
   float z1 = accZ;
-
   float x2 = x1;
   float y2 = cos(pitch) * y1 - sin(pitch) * z1;
   float z2 = sin(pitch) * y1 + cos(pitch) * z1;
@@ -266,13 +248,13 @@ void AccumulateIMUShift()
 
 void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
 {
-    if (!systemInited) {
-    systemInitCount++;
-    if (systemInitCount >= systemDelay) {
-      systemInited = true;
-    }
+    if (!systemInited) 
+	{
+		systemInitCount++;
+		if (systemInitCount >= systemDelay) 
+			systemInited = true;
     return;
-    }
+	}
 
     std::vector<int> scanStartInd(N_SCANS, 0);
     std::vector<int> scanEndInd(N_SCANS, 0);
@@ -283,9 +265,9 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     std::vector<int> indices;
     pcl::removeNaNFromPointCloud(laserCloudIn, laserCloudIn, indices);
     int cloudSize = laserCloudIn.points.size();
+	if(cloudSize<1)return;
     float startOri = -atan2(laserCloudIn.points[0].y, laserCloudIn.points[0].x);
-    float endOri = -atan2(laserCloudIn.points[cloudSize - 1].y,
-                        laserCloudIn.points[cloudSize - 1].x) + 2 * M_PI;
+    float endOri = -atan2(laserCloudIn.points[cloudSize - 1].y, laserCloudIn.points[cloudSize - 1].x) + 2 * M_PI;
 
     if (endOri - startOri > 3 * M_PI) {
         endOri -= 2 * M_PI;
@@ -404,29 +386,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     }
     int scanCount = -1;
 
-    sureE.setInputCloud(laserCloud);
-    // calculate features
-    sureE.calculateFeatures(); 
-    pcl::PointCloud<pcl::InterestPoint>::Ptr features;
-    features = sureE.getInterestPoints();
-    pcl::PointCloud<PointType> featureCloud;
-    std_msgs::Int16 featureNum;
-    featureNum.data=features->points.size();
-    pubFeatureNum.publish(featureNum);
 
-
-    for(pcl::PointCloud<pcl::InterestPoint>::const_iterator it=features->points.begin(); it != features->points.end(); ++it)
-    {
-        pcl::PointXYZI *p;
-        p = new pcl::PointXYZI;
-        p->x = (*it).x;
-        p->y = (*it).y;
-        p->z = (*it).z;
-        p->intensity = (*it).strength;
-        featureCloud.push_back(*p);
-    }
-
-
+std::cout<<"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"<<std::endl;
     sensor_msgs::PointCloud2 laserCloudOutMsg;
     pcl::toROSMsg(*laserCloud, laserCloudOutMsg);
     laserCloudOutMsg.header.stamp = laserCloudMsg->header.stamp;
@@ -434,15 +395,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     laserCloudOutMsg.fields[3].name="intensity";
     pubLaserCloud.publish(laserCloudOutMsg);
 
-    if(featureCloud.size()>8)
-    {
-
-        sensor_msgs::PointCloud2 interestPointsMsg;
-        pcl::toROSMsg(featureCloud,  interestPointsMsg);
-        interestPointsMsg.header.stamp = laserCloudMsg->header.stamp;
-        interestPointsMsg.header.frame_id = "/camera";
-        pubInterestPoints.publish(interestPointsMsg);
-    }
+std::cout<<"++++++++++++++++++++++++++++++"<<std::endl;
 
     pcl::PointCloud<pcl::PointXYZ> imuTrans(4, 1);
     imuTrans.points[0].x = imuPitchStart;
@@ -461,11 +414,13 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     imuTrans.points[3].y = imuVeloFromStartYCur;
     imuTrans.points[3].z = imuVeloFromStartZCur;
 
+std::cout<<"************************************************"<<std::endl;
     sensor_msgs::PointCloud2 imuTransMsg;
     pcl::toROSMsg(imuTrans, imuTransMsg);
     imuTransMsg.header.stamp = laserCloudMsg->header.stamp;
     imuTransMsg.header.frame_id = "/camera";
     pubImuTrans.publish(imuTransMsg);
+std::cout<<"------------------------------------------------"<<std::endl;
 }
 
 void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn)
@@ -491,45 +446,66 @@ void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn)
 
   AccumulateIMUShift();
 }
-void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array)
+void odometryHandler(const nav_msgs::Odometry::ConstPtr& odometryIn)
 {
-    featureSize=array->data[0];
-    featureSamplingRate=array->data[1];
-    normalsScale=array->data[2];
-    normalSamplingRate=array->data[3];
-    minimumCornerness=array->data[4];
-    init();
+    double roll, pitch, yaw;
+    tf::Quaternion orientation;
+    tf::quaternionMsgToTF(odometryIn->pose.pose.orientation, orientation);
+    tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
+    imuPointerLast = (imuPointerLast + 1) % imuQueLength;
+    imuTime[imuPointerLast] = odometryIn->header.stamp.toSec();
+    imuRoll[imuPointerLast] = roll;
+    imuPitch[imuPointerLast] = pitch;
+    imuYaw[imuPointerLast] = yaw;
+    imuVeloX[imuPointerLast] = odometryIn->twist.twist.linear.y ;
+    imuVeloY[imuPointerLast] = odometryIn->twist.twist.linear.z ;
+    imuVeloZ[imuPointerLast] = odometryIn->twist.twist.linear.x ;
 
+    float velX=imuVeloX[imuPointerLast];
+    float velY=imuVeloY[imuPointerLast];
+    float velZ=imuVeloZ[imuPointerLast];
+    
+    imuShiftX[imuPointerLast] = odometryIn->pose.pose.position.y;
+    imuShiftY[imuPointerLast] = odometryIn->pose.pose.position.z;
+    imuShiftZ[imuPointerLast] = odometryIn->pose.pose.position.x;
+  
+      float x1 = cos(roll) * velX - sin(roll) * velY;
+      float y1 = sin(roll) * velX + cos(roll) * velY;
+      float z1 = velZ;
 
+      float x2 = x1;
+      float y2 = cos(pitch) * y1 - sin(pitch) * z1;
+      float z2 = sin(pitch) * y1 + cos(pitch) * z1;
+
+      velX = cos(yaw) * x2 + sin(yaw) * z2;
+      velY = y2;
+      velZ = -sin(yaw) * x2 + cos(yaw) * z2;
+
+      int imuPointerBack = (imuPointerLast + imuQueLength - 1) % imuQueLength;
+      double timeDiff = imuTime[imuPointerLast] - imuTime[imuPointerBack];
+      if (timeDiff < scanPeriod) {
+
+        imuShiftX[imuPointerLast] = imuShiftX[imuPointerBack] + imuVeloX[imuPointerBack] * timeDiff;
+        imuShiftY[imuPointerLast] = imuShiftY[imuPointerBack] + imuVeloY[imuPointerBack] * timeDiff;
+        imuShiftZ[imuPointerLast] = imuShiftZ[imuPointerBack] + imuVeloZ[imuPointerBack] * timeDiff;
+
+        imuVeloX[imuPointerLast] = velX;
+        imuVeloY[imuPointerLast] = velY;
+        imuVeloZ[imuPointerLast] = velZ;
+      }    
 }
 
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "scanRegistration");
   ros::NodeHandle nh;
-  nh.param("featureSize", featureSize, featureSize);
-  nh.param("featureSamplingRate",featureSamplingRate,featureSamplingRate);
-  nh.param("normalSamplingRate",normalSamplingRate,normalSamplingRate);
-  nh.param("normalsScale",normalsScale,normalsScale);
-  nh.param("minimumCornerness",minimumCornerness,minimumCornerness);
-  if(argc>1)featureSize=atof(argv[1]);
-  if(argc>2)featureSamplingRate=atof(argv[2]);
-  if(argc>3)normalSamplingRate=atof(argv[3]);
-  if(argc>4)normalsScale=atof(argv[4]);
-  if(argc>5)minimumCornerness=atof(argv[5]);
 
-  ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2> 
-                                  ("/velodyne_points", 2, laserCloudHandler);
-
-  ros::Subscriber subFeatParams = nh.subscribe<std_msgs::Float32MultiArray> ("/SUREparams", 5, paramHandler);
-
+  ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2> ("/velodyne_points", 2, laserCloudHandler);
+  ros::Subscriber subOdometry = nh.subscribe<nav_msgs::Odometry> ("/pose", 50, odometryHandler);
+  pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2> ("/velodyne_cloud_2", 2);
   ros::Subscriber subImu = nh.subscribe<sensor_msgs::Imu> ("/imu/data", 50, imuHandler);
 
-  pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>
-                                 ("/velodyne_cloud_2", 2);
-    pubFeatureNum= nh.advertise<std_msgs::Int16> ("/stoper", 1);
 
-  pubInterestPoints = nh.advertise<sensor_msgs::PointCloud2> ("/laser_interest", 2);
 
   pubImuTrans = nh.advertise<sensor_msgs::PointCloud2> ("/imu_trans", 5);
 

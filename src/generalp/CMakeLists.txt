@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(ndt_mod)
-set(SURE_DIR "~/workspace/rgbdpro/sure3d/")
+project(generalp)
+set(SURE_INCLUDE_DIRS "~/workspace/rgbdpro/sure3d/include")
+set(SURE_LIBRARY_DIRS "~/workspace/rgbdpro/sure3d/lib")
+set(SURE_LIBRARIES "~/workspace/rgbdpro/sure3d/lib/libsure3d.so")
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -10,10 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   sensor_msgs
-  ndt_registration
-  ndt_map
   std_msgs
-  velodyne_msgs
   tf
   rosbag
 )
@@ -27,15 +26,12 @@ include_directories(
   include
 	${catkin_INCLUDE_DIRS}
 	${Boost_INCLUDE_DIRS}
-	${SURE_DIR}include
+	${SURE_INCLUDE_DIRS}
 #	${EIGEN3_INCLUDE_DIR}
 	${PCL_INCLUDE_DIRS})
-link_directories ( ${Boost_LIBRARY_DIRS} )
+link_directories ( ${Boost_LIBRARY_DIRS} ${SURE_LIBRARY_DIRS})
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs rosbag
-  ndt_registration
-  ndt_map
-  velodyne_msgs
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS include
 )
@@ -43,46 +39,15 @@ include(pcl_find_sse.cmake)
 PCL_CHECK_FOR_SSE()
 find_package(Boost REQUIRED)
 
-set(srcs
-	${SURE_DIR}src/sure/normal_histogram.cpp
-	${SURE_DIR}src/sure/octree_value.cpp
-	${SURE_DIR}src/sure/configuration.cpp
-	${SURE_DIR}src/sure/surflet.cpp
-	${SURE_DIR}src/sure/color_surflet.cpp
-	${SURE_DIR}src/sure/map2d.cpp
-	${SURE_DIR}src/sure/range_image.cpp
-	${SURE_DIR}src/sure/histogram_base.cpp
-	${SURE_DIR}src/sure/histogram_l2.cpp
-	${SURE_DIR}src/sure/histogram_emd.cpp
-	${SURE_DIR}src/sure/hue_descriptor.cpp
-	${SURE_DIR}src/sure/point_feature_descriptor.cpp
-	${SURE_DIR}src/sure/lightness_descriptor.cpp
-	${SURE_DIR}src/sure/feature.cpp
-	${SURE_DIR}src/sure/sure_estimator.cpp
-	)
+# set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
+# target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} ${Boost_LIBRARIES} ${SURE_LIBRARIES} -lboost_serialization)
+# set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 0.2.7) 
 
-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
-add_library(${PROJECT_NAME} SHARED ${srcs})
-target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} ${Boost_LIBRARIES} -lboost_serialization)
-set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 0.2.7) 
+add_executable(scanFix src/scanFixImuOdom.cpp)
+target_link_libraries(scanFix ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
-add_executable(scanFixWithIMU src/scanFixWithIMU.cpp)
-target_link_libraries(scanFixWithIMU ${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
-
-add_executable(laserOdometryNDT src/laserOdometry.cpp)
-target_link_libraries(laserOdometryNDT ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})
-
-add_executable(notRealtime src/notRealtime.cpp)
-target_link_libraries(notRealtime ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
-
-add_executable(laserOdometryOM src/laserOdometryOM.cpp)
-target_link_libraries(laserOdometryOM ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
-
-add_executable(mappingNDT src/laserMapping.cpp)
-target_link_libraries(mappingNDT ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})
-
-add_executable(transformMaintenanceNDT src/transformMaintenance.cpp)
-target_link_libraries(transformMaintenanceNDT ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS})
+add_executable(findInterestSure src/findInterestSure.cpp)
+target_link_libraries(findInterestSure ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} ${SURE_LIBRARIES} -lboost_serialization)
 
 
 

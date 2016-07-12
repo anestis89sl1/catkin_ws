@@ -51,7 +51,7 @@
 #include "std_msgs/MultiArrayLayout.h"
 #include "std_msgs/MultiArrayDimension.h"
 #include "std_msgs/Float32MultiArray.h"
-#include <ndt_matcher_d2d.h>
+#include <ndt_registration/ndt_matcher_d2d.h>
 #include <ndt_map/pointcloud_utils.h>
 
 void run();
