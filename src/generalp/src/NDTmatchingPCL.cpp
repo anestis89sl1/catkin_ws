@@ -32,7 +32,7 @@
 
 #include <cmath>
 
-#include <anestis_loam_mod/common.h>
+#include <generalp/common.h>
 #include <nav_msgs/Odometry.h>
 #include <rosgraph_msgs/Clock.h>
 #include <opencv/cv.h>
@@ -53,22 +53,21 @@
 #include "std_msgs/MultiArrayLayout.h"
 #include "std_msgs/MultiArrayDimension.h"
 #include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/Int16.h"
 #include <pcl/registration/ndt.h>
 #include <pcl/filters/approximate_voxel_grid.h>
 
 
 
 void run();
-const float scanPeriod = 0.1;
 
-Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
-Eigen::Translation3f init_translation (0, 0, 0);
-Eigen::Matrix4f T= (init_translation * init_rotation).matrix ();
-bool systemInited = false;
 
+float Grid_res,epsilon,stepSize;
+int numIter;
 double timeLaserCloudFullRes = 0;
 double timeImuTrans = 0;
 
+float voxel_size;
 bool newLaserCloudFullRes = false;
 bool newImuTrans = false;
 bool reset=false;
@@ -77,7 +76,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud(new pcl::PointCloud<pcl::PointX
 pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr imuTrans(new pcl::PointCloud<pcl::PointXYZ>());
 
-
+char rotatingFun[4]={'|','/','-','\\'};
+int rotateCount=0;
 
 
 float imuRollStart = 0, imuPitchStart = 0, imuYawStart = 0;
@@ -145,7 +145,6 @@ void PluginIMURotation(float bcx, float bcy, float bcz, float blx, float bly, fl
                - calx*calz*cblx*sblz);
   acz = atan2(srzcrx / cos(acx), crzcrx / cos(acx));
 }
-float voxel_size=0.4;
 void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudFullRes2)
 {
 	pcl::PointCloud<PointType>::Ptr laserCloudTemp(new pcl::PointCloud<PointType>);
@@ -160,7 +159,7 @@ void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloud
 	approximate_voxel_filter.setLeafSize (voxel_size, voxel_size, voxel_size);
 	approximate_voxel_filter.setInputCloud (non_filtered_cloud);
 	approximate_voxel_filter.filter (*input_cloud);
-	std::cout << "Filtered cloud contains " << input_cloud->size () << std::endl;
+	std::cout << '\b'<<rotatingFun[++rotateCount%4] << std::flush;
 
   newLaserCloudFullRes = true;
 }
@@ -191,13 +190,36 @@ void imuTransHandler(const sensor_msgs::PointCloud2ConstPtr& imuTrans2)
   newImuTrans = true;
 }
 
-void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array) { ros::shutdown(); }
+void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array)
+{
+	reset=true;
+	voxel_size=array->data[0];
+	Grid_res=array->data[1];
+	epsilon=array->data[2];
+	stepSize=array->data[3];
+	//numIter=floor(array->data[1]);
+
+}
 #define velodyne
+#define genetic
+//#define WITHDEBUG
 
 int main(int argc, char** argv)
 {
+	float skipB;
 	ros::init(argc, argv, "laserOdometry");
-	ros::NodeHandle nh;
+	ros::NodeHandle nh("~");
+	nh.param("voxel_size",voxel_size,1.5f);
+	nh.param("Grid_res", Grid_res,5.0f);
+	nh.param("epsilon",epsilon,0.01f);
+	nh.param("stepSize",stepSize,0.5f);
+	nh.param("numIter", numIter,35);
+	nh.param("skipBelow", skipB,0.0f);
+	std::cout<<std::endl<<std::endl<<"Running NDT  ";
+
+
+    ros::Subscriber subReset = nh.subscribe<std_msgs::Float32MultiArray> ("/NDTparams", 5,paramHandler);
+
 
 	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>
 		("/velodyne_cloud_2", 2, laserCloudFullResHandler);
@@ -219,138 +241,145 @@ int main(int argc, char** argv)
 	laserOdometryTrans.child_frame_id_ = "/laser_odom";
 
 
-	bool status = ros::ok();
-	int counter1=0;
 	ros::Rate rate(100);
-	float Grid_res=1.0;
-	int numIter = argc>4?atoi(argv[4]):35;
-	if(argc>2)voxel_size=atof(argv[2]);
-	if(argc>3)Grid_res=atof(argv[3]);
-	while(ros::ok())
-	{
-		rate.sleep();
-		ros::spinOnce();
-		/*
-		if (!(newLaserCloudFullRes && newImuTrans && fabs(timeImuTrans -timeLaserCloudFullRes ) < 0.005)) 
-			continue;
-		*/
-		if (!newLaserCloudFullRes ) 
-			continue;
-		newLaserCloudFullRes = false;
-		newImuTrans = false;
-
-
-		if (!systemInited) 
+	Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
+	Eigen::Translation3f init_translation (0, 0, 0);
+	#ifdef genetic
+		while(!reset&&ros::ok())
 		{
-			pcl::PointCloud<pcl::PointXYZ>::Ptr laserCloudTemp = input_cloud;
-			input_cloud = target_cloud;
-			target_cloud = laserCloudTemp;
-
-			sensor_msgs::PointCloud2 interestPointsLast2;
-			pcl::toROSMsg(*target_cloud, interestPointsLast2);
-			interestPointsLast2.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
-			interestPointsLast2.header.frame_id = "/camera";
-			pubLaserCloudFullRes.publish(interestPointsLast2);
-
-			systemInited = true;
-			continue;
+			rate.sleep();
+			ros::spinOnce();
 		}
-
-		///////NDT
-		///copyPointCloud(*laserCloudFullRes,*input_cloud);
-		// Filtering input scan to roughly 10% of original size to increase speed of registration.
-
-		// Initializing Normal Distributions Transform (NDT).
-		pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-
-		// Setting scale dependent NDT parameters
-		// Setting minimum transformation difference for termination condition.
-		ndt.setTransformationEpsilon (argc>1?atof(argv[1]):0.01);
-		// Setting maximum step size for More-Thuente line search.
-		ndt.setStepSize (argc>5?atof(argv[5]):0.1);
-		//Setting Resolution of NDT grid structure (VoxelGridCovariance).
-		ndt.setResolution (Grid_res);
-
-		// Setting max number of registration iterations.
-		ndt.setMaximumIterations (numIter);
-
-		// Setting point cloud to be aligned.
-		ndt.setInputSource (input_cloud);
-		// Setting point cloud to be aligned to.
-		ndt.setInputTarget (target_cloud);
-
-		// Set initial alignment estimate found using robot odometry.
-		//Eigen::AngleAxisf init_rotation (0.6931, Eigen::Vector3f::UnitZ ());
-		//Eigen::Translation3f init_translation (1.79387, 0.720047, 0);
-
-		// Calculating required rigid transform to align the input cloud to the target cloud.
-		pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-		//ndt.align (*output_cloud, init_guess);
-		std::cout<<T<<std::endl;
-		ndt.align (*output_cloud,T);
-
-		std::cout <<output_cloud->size()<< "Normal Distributions Transform has converged:" << ndt.hasConverged ()
-		<< " score: " << ndt.getFitnessScore () << std::endl;
-
-		// Transforming unfiltered, input cloud using found transform.
-		//pcl::transformPointCloud (*input_cloud, *output_cloud, ndt.getFinalTransformation ());
-		(*target_cloud)=(*output_cloud);
+		std_msgs::Int16 fitnessMsg;
+	#endif
+	while(true)
+	{
+		reset=false;
+		bool systemInited = false;
+		Eigen::Matrix4f T= (init_translation * init_rotation).matrix ();
+		while(ros::ok()&&!reset)
+		{
+			rate.sleep();
+			ros::spinOnce();
+			if (!newLaserCloudFullRes ) 
+				continue;
+			newLaserCloudFullRes = false;
+			newImuTrans = false;
 
 
+			if (!systemInited) 
+			{
+				pcl::PointCloud<pcl::PointXYZ>::Ptr laserCloudTemp = input_cloud;
+				input_cloud = target_cloud;
+				target_cloud = laserCloudTemp;
 
-		if(argc>6&&atof(argv[6])<ndt.getFitnessScore())
-			continue;
+				sensor_msgs::PointCloud2 interestPointsLast2;
+				pcl::toROSMsg(*target_cloud, interestPointsLast2);
+				interestPointsLast2.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
+				interestPointsLast2.header.frame_id = "/camera";
+				pubLaserCloudFullRes.publish(interestPointsLast2);
+
+				systemInited = true;
+				continue;
+			}
+
+			///////NDT
+			///copyPointCloud(*laserCloudFullRes,*input_cloud);
+			// Filtering input scan to roughly 10% of original size to increase speed of registration.
+
+			// Initializing Normal Distributions Transform (NDT).
+			pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
+
+			// Setting scale dependent NDT parameters
+			// Setting minimum transformation difference for termination condition.
+			ndt.setTransformationEpsilon (epsilon);
+			// Setting maximum step size for More-Thuente line search.
+			ndt.setStepSize (stepSize);
+			//Setting Resolution of NDT grid structure (VoxelGridCovariance).
+			ndt.setResolution (Grid_res);
+
+			// Setting max number of registration iterations.
+			ndt.setMaximumIterations (numIter);
+
+			// Setting point cloud to be aligned.
+			ndt.setInputSource (input_cloud);
+			// Setting point cloud to be aligned to.
+			ndt.setInputTarget (target_cloud);
+
+			// Set initial alignment estimate found using robot odometry.
+			//Eigen::AngleAxisf init_rotation (0.6931, Eigen::Vector3f::UnitZ ());
+			//Eigen::Translation3f init_translation (1.79387, 0.720047, 0);
+
+			// Calculating required rigid transform to align the input cloud to the target cloud.
+			pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+			//ndt.align (*output_cloud, init_guess);
+			ndt.align (*output_cloud,T);
+			//ndt.align (*output_cloud);
+			#ifdef  WITHDEBUG
+				std::cout <<output_cloud->size()<< "NDT has converged:" << ndt.hasConverged ()
+				<< " score: " << ndt.getFitnessScore () << std::endl;
+				std::cout<<T<<std::endl;
+			#endif
+			// Transforming unfiltered, input cloud using found transform.
+			//pcl::transformPointCloud (*input_cloud, *output_cloud, ndt.getFinalTransformation ());
+			(*target_cloud)=(*output_cloud);
 
 
 
-		//Eigen::Matrix4f T=icp.getFinalTransformation();
-		T = ndt.getFinalTransformation();
-
-		tf::Matrix3x3 tf3d;
-		tf3d.setValue(
-			static_cast<double>(T(0,0)), static_cast<double>(T(0,1)), static_cast<double>(T(0,2)), 
-			static_cast<double>(T(1,0)), static_cast<double>(T(1,1)), static_cast<double>(T(1,2)), 
-			static_cast<double>(T(2,0)), static_cast<double>(T(2,1)), static_cast<double>(T(2,2)));
-
-		tf::Quaternion tfqt;
-		tf::Vector3 origin;
-		origin.setValue(
-			static_cast<double>(T(0,3)),
-			static_cast<double>(T(1,3)),
-			static_cast<double>(T(2,3)));
-		tf3d.getRotation(tfqt);
-		laserOdometryTrans.setOrigin(origin);
-		laserOdometryTrans.setRotation(tfqt);
-		laserOdometryTrans.stamp_ = ros::Time().fromSec(timeLaserCloudFullRes );
-		tfBroadcaster.sendTransform(laserOdometryTrans);
-
-		double rxd, ryd, rzd;
-		float tx, ty, tz;
-		//float rx, ry, rz, tx, ty, tz;
-		tf3d.getRPY(rxd,ryd,rzd);
-		tx= static_cast<float>(T(0,3));
-		ty= static_cast<float>(T(1,3));
-		tz= static_cast<float>(T(2,3));
+			if(skipB!=0&&skipB<ndt.getFitnessScore())
+				continue;
 
 
-		geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(rxd, ryd, rzd);
 
-		laserOdometry.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes );
-		laserOdometry.pose.pose.orientation.x = geoQuat.x;
-		laserOdometry.pose.pose.orientation.y = geoQuat.y;
-		laserOdometry.pose.pose.orientation.z = geoQuat.z;
-		laserOdometry.pose.pose.orientation.w = geoQuat.w;
-		laserOdometry.pose.pose.position.x = tx;
-		laserOdometry.pose.pose.position.y = ty;
-		laserOdometry.pose.pose.position.z = tz;
-		pubLaserOdometry.publish(laserOdometry);
+			//Eigen::Matrix4f T=icp.getFinalTransformation();
+			T = ndt.getFinalTransformation();
+
+			tf::Matrix3x3 tf3d;
+			tf3d.setValue(
+				static_cast<double>(T(0,0)), static_cast<double>(T(0,1)), static_cast<double>(T(0,2)), 
+				static_cast<double>(T(1,0)), static_cast<double>(T(1,1)), static_cast<double>(T(1,2)), 
+				static_cast<double>(T(2,0)), static_cast<double>(T(2,1)), static_cast<double>(T(2,2)));
+
+			tf::Quaternion tfqt;
+			tf::Vector3 origin;
+			origin.setValue(
+				static_cast<double>(T(0,3)),
+				static_cast<double>(T(1,3)),
+				static_cast<double>(T(2,3)));
+			tf3d.getRotation(tfqt);
+			laserOdometryTrans.setOrigin(origin);
+			laserOdometryTrans.setRotation(tfqt);
+			laserOdometryTrans.stamp_ = ros::Time().fromSec(timeLaserCloudFullRes );
+			tfBroadcaster.sendTransform(laserOdometryTrans);
+
+			double rxd, ryd, rzd;
+			float tx, ty, tz;
+			//float rx, ry, rz, tx, ty, tz;
+			tf3d.getRPY(rxd,ryd,rzd);
+			tx= static_cast<float>(T(0,3));
+			ty= static_cast<float>(T(1,3));
+			tz= static_cast<float>(T(2,3));
 
 
-		sensor_msgs::PointCloud2 laserCloudFullRes3;
-		pcl::toROSMsg(*output_cloud, laserCloudFullRes3);
-		laserCloudFullRes3.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
-		laserCloudFullRes3.header.frame_id = "/camera_init";
-		pubLaserCloudFullRes.publish(laserCloudFullRes3);
+			geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(rxd, ryd, rzd);
+
+			laserOdometry.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes );
+			laserOdometry.pose.pose.orientation.x = geoQuat.x;
+			laserOdometry.pose.pose.orientation.y = geoQuat.y;
+			laserOdometry.pose.pose.orientation.z = geoQuat.z;
+			laserOdometry.pose.pose.orientation.w = geoQuat.w;
+			laserOdometry.pose.pose.position.x = tx;
+			laserOdometry.pose.pose.position.y = ty;
+			laserOdometry.pose.pose.position.z = tz;
+			pubLaserOdometry.publish(laserOdometry);
+
+
+			sensor_msgs::PointCloud2 laserCloudFullRes3;
+			pcl::toROSMsg(*output_cloud, laserCloudFullRes3);
+			laserCloudFullRes3.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
+			laserCloudFullRes3.header.frame_id = "/camera_init";
+			pubLaserCloudFullRes.publish(laserCloudFullRes3);
+		}
 	}
 	return 0;
 }

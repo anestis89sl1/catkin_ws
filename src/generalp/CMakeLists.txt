@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   tf
+  velodyne_msgs
   rosbag
 )
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
@@ -32,6 +33,7 @@ include_directories(
 link_directories ( ${Boost_LIBRARY_DIRS} ${SURE_LIBRARY_DIRS})
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs rosbag
+  velodyne_msgs
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS include
 )
@@ -39,16 +41,18 @@ include(pcl_find_sse.cmake)
 PCL_CHECK_FOR_SSE()
 find_package(Boost REQUIRED)
 
-# set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
-# target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} ${Boost_LIBRARIES} ${SURE_LIBRARIES} -lboost_serialization)
-# set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 0.2.7) 
 
 add_executable(scanFix src/scanFixImuOdom.cpp)
 target_link_libraries(scanFix ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
+add_executable(genetic src/genetic.cpp)
+target_link_libraries(genetic ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
+
 add_executable(findInterestSure src/findInterestSure.cpp)
 target_link_libraries(findInterestSure ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} ${SURE_LIBRARIES} -lboost_serialization)
 
+add_executable(NDTmatchingPCL src/NDTmatchingPCL.cpp)
+target_link_libraries(NDTmatchingPCL  ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
 
 ## Uncomment this if the package has a setup.py. This macro ensures

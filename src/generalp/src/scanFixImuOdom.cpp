@@ -387,7 +387,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     int scanCount = -1;
 
 
-std::cout<<"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"<<std::endl;
+////std::cout<<"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"<<std::endl;
     sensor_msgs::PointCloud2 laserCloudOutMsg;
     pcl::toROSMsg(*laserCloud, laserCloudOutMsg);
     laserCloudOutMsg.header.stamp = laserCloudMsg->header.stamp;
@@ -395,7 +395,7 @@ std::cout<<"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&"<<std::endl;
     laserCloudOutMsg.fields[3].name="intensity";
     pubLaserCloud.publish(laserCloudOutMsg);
 
-std::cout<<"++++++++++++++++++++++++++++++"<<std::endl;
+/////std::cout<<"++++++++++++++++++++++++++++++"<<std::endl;
 
     pcl::PointCloud<pcl::PointXYZ> imuTrans(4, 1);
     imuTrans.points[0].x = imuPitchStart;
@@ -414,13 +414,13 @@ std::cout<<"++++++++++++++++++++++++++++++"<<std::endl;
     imuTrans.points[3].y = imuVeloFromStartYCur;
     imuTrans.points[3].z = imuVeloFromStartZCur;
 
-std::cout<<"************************************************"<<std::endl;
+///std::cout<<"************************************************"<<std::endl;
     sensor_msgs::PointCloud2 imuTransMsg;
     pcl::toROSMsg(imuTrans, imuTransMsg);
     imuTransMsg.header.stamp = laserCloudMsg->header.stamp;
     imuTransMsg.header.frame_id = "/camera";
     pubImuTrans.publish(imuTransMsg);
-std::cout<<"------------------------------------------------"<<std::endl;
+///std::cout<<"------------------------------------------------"<<std::endl;
 }
 
 void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn)
