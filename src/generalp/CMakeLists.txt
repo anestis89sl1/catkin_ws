@@ -3,6 +3,8 @@ project(generalp)
 set(SURE_INCLUDE_DIRS "~/workspace/rgbdpro/sure3d/include")
 set(SURE_LIBRARY_DIRS "~/workspace/rgbdpro/sure3d/lib")
 set(SURE_LIBRARIES "~/workspace/rgbdpro/sure3d/lib/libsure3d.so")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g O0")
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -13,9 +15,13 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   std_msgs
+  pcl_ros
   tf
   velodyne_msgs
   rosbag
+  ndt_registration
+  ndt_map
+  ndt_fuser
 )
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 ## System dependencies are found with CMake's conventions
@@ -33,6 +39,7 @@ include_directories(
 link_directories ( ${Boost_LIBRARY_DIRS} ${SURE_LIBRARY_DIRS})
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs rosbag
+  pcl_ros
   velodyne_msgs
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS include
@@ -48,12 +55,17 @@ target_link_libraries(scanFix ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS
 add_executable(genetic src/genetic.cpp)
 target_link_libraries(genetic ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
+add_executable(recordT src/recordT.cpp)
+target_link_libraries(recordT ${catkin_LIBRARIES} ${PCL_LIBRARIES}  -lboost_serialization)
+
 add_executable(findInterestSure src/findInterestSure.cpp)
 target_link_libraries(findInterestSure ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} ${SURE_LIBRARIES} -lboost_serialization)
 
 add_executable(NDTmatchingPCL src/NDTmatchingPCL.cpp)
 target_link_libraries(NDTmatchingPCL  ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
+add_executable(NDT_OM_ORU src/NDT-OM_ORU.cpp)
+target_link_libraries(NDT_OM_ORU ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${Boost_LIBRARIES} -lboost_serialization)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed

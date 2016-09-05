@@ -1,35 +1,3 @@
-// Copyright 2013, Ji Zhang, Carnegie Mellon University
-// Further contributions copyright (c) 2016, Southwest Research Institute
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// 1. Redistributions of source code must retain the above copyright notice,
-//    this list of conditions and the following disclaimer.
-// 2. Redistributions in binary form must reproduce the above copyright notice,
-//    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution.
-// 3. Neither the name of the copyright holder nor the names of its
-//    contributors may be used to endorse or promote products derived from this
-//    software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-// This is an implementation of the algorithm described in the following paper:
-//   J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time.
-//     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014.
-
 #include <cmath>
 
 #include <generalp/common.h>
@@ -49,20 +17,29 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_listener.h>
-#include <pcl/registration/icp.h>
 #include "std_msgs/MultiArrayLayout.h"
 #include "std_msgs/MultiArrayDimension.h"
 #include "std_msgs/Float32MultiArray.h"
 #include "std_msgs/Int16.h"
-#include <pcl/registration/ndt.h>
 #include <pcl/filters/approximate_voxel_grid.h>
+#include <ndt_registration/ndt_matcher_p2d.h>
+#include <ndt_map/ndt_map.h>
+#include <ndt_map/lazy_grid.h>
+#include <ndt_map/ndt_cell.h>
+#include <ndt_fuser/ndt_fuser_hmt.h>
+#include <tf_conversions/tf_eigen.h>
+#include <csignal>
+#include <ndt_map/NDTMapMsg.h>
+#include <ndt_map/ndt_conversions.h>
+#include <nav_msgs/OccupancyGrid.h>
 
 
 
 void run();
 
 
-float Grid_res,epsilon,stepSize;
+Eigen::Transform<double,3,Eigen::Affine,Eigen::ColMajor> T;
+float resolution;
 int numIter;
 double timeLaserCloudFullRes = 0;
 double timeImuTrans = 0;
@@ -72,7 +49,6 @@ bool newLaserCloudFullRes = false;
 bool newImuTrans = false;
 bool reset=false;
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr imuTrans(new pcl::PointCloud<pcl::PointXYZ>());
 
@@ -163,7 +139,6 @@ void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloud
 
   newLaserCloudFullRes = true;
 }
-
 void imuTransHandler(const sensor_msgs::PointCloud2ConstPtr& imuTrans2)
 {
   timeImuTrans = imuTrans2->header.stamp.toSec();
@@ -194,41 +169,48 @@ void paramHandler(const std_msgs::Float32MultiArray::ConstPtr& array)
 {
 	reset=true;
 	voxel_size=array->data[0];
-	Grid_res=array->data[1];
-	epsilon=array->data[2];
-	stepSize=array->data[3];
-	//numIter=floor(array->data[1]);
-
+	resolution=array->data[1];
 }
 #define velodyne
 //#define genetic
-#define WITHDEBUG
+//#define WITHDEBUG
 
+lslgeneric::NDTFuserHMT *fuser;
+void int_handler(int x)
+{
+    ROS_INFO("Saving current map to map directory ");
+    fuser->saveMap(); 
+
+}
 int main(int argc, char** argv)
 {
-	float skipB;
+	float skipB,size_x,size_y,size_z;
 	ros::init(argc, argv, "laserOdometry");
 	ros::NodeHandle nh("~");
-	nh.param("voxel_size",voxel_size,1.34f);
-	nh.param("Grid_res", Grid_res,5.51f);
-	nh.param("epsilon",epsilon,0.65f);
-	nh.param("stepSize",stepSize,2.24f);
+		bool beHMT=true;
+		float sensor_range=30;
+		bool visualize=false;
+		bool doMultires=true;
+		std::string map_name="toonoma";
+		std::string map_dir="map";
+	nh.param("voxel_size",voxel_size,0.05f);
+	nh.param("size_x",size_x,50.05f);
+	nh.param("size_y",size_y,50.05f);
+	nh.param("size_z",size_z,5.05f);
+	nh.param("sensor_range",sensor_range,30.0f);
+	nh.param("resolution", resolution,1.00f);
 	nh.param("numIter", numIter,35);
-	nh.param("skipBelow", skipB,0.0f);
+	nh.param("doMultires", doMultires,true);
+	nh.param("visualize",visualize,true);
+	signal(SIGINT,int_handler);
 	std::cout<<std::endl<<std::endl<<"Running NDT  ";
 
-
     ros::Subscriber subReset = nh.subscribe<std_msgs::Float32MultiArray> ("/NDTparams", 5,paramHandler);
-
-
-	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>
-		("/velodyne_cloud_2", 2, laserCloudFullResHandler);
-
+	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2> ("/velodyne_points", 2, laserCloudFullResHandler);
 	ros::Subscriber subImuTrans = nh.subscribe<sensor_msgs::PointCloud2> ("/imu_trans", 5, imuTransHandler);
-
-
 	ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2> ("/velodyne_cloud_3", 2);
 
+  ros::Publisher map_pub = nh.advertise<nav_msgs::OccupancyGrid>("dummy_occ_map_pub", 1000);
 
 	ros::Publisher pubLaserOdometry = nh.advertise<nav_msgs::Odometry> ("/laser_odom_to_init", 5);
 	nav_msgs::Odometry laserOdometry;
@@ -242,8 +224,6 @@ int main(int argc, char** argv)
 
 
 	ros::Rate rate(100);
-	Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
-	Eigen::Translation3f init_translation (0, 0, 0);
 	#ifdef genetic
 		while(!reset&&ros::ok())
 		{
@@ -254,9 +234,25 @@ int main(int argc, char** argv)
 	#endif
 	while(true)
 	{
+
+		fuser = new lslgeneric::NDTFuserHMT(resolution,size_x,size_y,size_z, sensor_range, visualize,false,doMultires, false, numIter, map_name, beHMT, map_dir, true);
 		reset=false;
 		bool systemInited = false;
-		Eigen::Matrix4f T= (init_translation * init_rotation).matrix ();
+	    double pose_init_x=0,pose_init_y=0,pose_init_z=0,
+		  pose_init_r=0,pose_init_p=0,pose_init_t=0;
+		Eigen::Affine3d pose_, Tmotion, sensor_pose_;
+		pose_ =  Eigen::Translation<double,3>(pose_init_x,pose_init_y,pose_init_z)*
+		  Eigen::AngleAxis<double>(pose_init_r,Eigen::Vector3d::UnitX()) *
+		  Eigen::AngleAxis<double>(pose_init_p,Eigen::Vector3d::UnitY()) *
+		  Eigen::AngleAxis<double>(pose_init_t,Eigen::Vector3d::UnitZ()) ;
+		Tmotion =  Eigen::Translation<double,3>(pose_init_x,pose_init_y,pose_init_z)*
+		  Eigen::AngleAxis<double>(pose_init_r,Eigen::Vector3d::UnitX()) *
+		  Eigen::AngleAxis<double>(pose_init_p,Eigen::Vector3d::UnitY()) *
+		  Eigen::AngleAxis<double>(pose_init_t,Eigen::Vector3d::UnitZ()) ;
+		Tmotion.setIdentity();
+		ROS_INFO("Init pose is (%lf,%lf,%lf)", pose_.translation()(0), pose_.translation()(1), 
+                 pose_.rotation().eulerAngles(0,1,2)(0));
+	 
 		while(ros::ok()&&!reset)
 		{
 			rate.sleep();
@@ -269,12 +265,10 @@ int main(int argc, char** argv)
 
 			if (!systemInited) 
 			{
-				pcl::PointCloud<pcl::PointXYZ>::Ptr laserCloudTemp = input_cloud;
-				input_cloud = target_cloud;
-				target_cloud = laserCloudTemp;
+				fuser->initialize(pose_,*input_cloud.get());
 
 				sensor_msgs::PointCloud2 interestPointsLast2;
-				pcl::toROSMsg(*target_cloud, interestPointsLast2);
+				pcl::toROSMsg(*input_cloud, interestPointsLast2);
 				interestPointsLast2.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
 				interestPointsLast2.header.frame_id = "/camera";
 				pubLaserCloudFullRes.publish(interestPointsLast2);
@@ -283,99 +277,14 @@ int main(int argc, char** argv)
 				continue;
 			}
 
-			///////NDT
-			///copyPointCloud(*laserCloudFullRes,*input_cloud);
-			// Filtering input scan to roughly 10% of original size to increase speed of registration.
 
-			// Initializing Normal Distributions Transform (NDT).
-			pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-
-			// Setting scale dependent NDT parameters
-			// Setting minimum transformation difference for termination condition.
-			ndt.setTransformationEpsilon (epsilon);
-			// Setting maximum step size for More-Thuente line search.
-			ndt.setStepSize (stepSize);
-			//Setting Resolution of NDT grid structure (VoxelGridCovariance).
-			ndt.setResolution (Grid_res);
-
-			// Setting max number of registration iterations.
-			ndt.setMaximumIterations (numIter);
-
-			// Setting point cloud to be aligned.
-			ndt.setInputSource (input_cloud);
-			// Setting point cloud to be aligned to.
-			ndt.setInputTarget (target_cloud);
-
-			// Set initial alignment estimate found using robot odometry.
-			//Eigen::AngleAxisf init_rotation (0.6931, Eigen::Vector3f::UnitZ ());
-			//Eigen::Translation3f init_translation (1.79387, 0.720047, 0);
-
-			// Calculating required rigid transform to align the input cloud to the target cloud.
-			pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-			//ndt.align (*output_cloud, init_guess);
-			ndt.align (*output_cloud,T);
-			//ndt.align (*output_cloud);
-			#ifdef  WITHDEBUG
-				std::cout <<output_cloud->size()<< "NDT has converged:" << ndt.hasConverged ()
-				<< " score: " << ndt.getFitnessScore () << std::endl;
-				std::cout<<T<<std::endl;
-			#endif
-			// Transforming unfiltered, input cloud using found transform.
-			//pcl::transformPointCloud (*input_cloud, *output_cloud, ndt.getFinalTransformation ());
-			(*target_cloud)=(*output_cloud);
-
-
-
-			if(skipB!=0&&skipB<ndt.getFitnessScore())
-				continue;
-
-
-
-			//Eigen::Matrix4f T=icp.getFinalTransformation();
-			T = ndt.getFinalTransformation();
-
-			tf::Matrix3x3 tf3d;
-			tf3d.setValue(
-				static_cast<double>(T(0,0)), static_cast<double>(T(0,1)), static_cast<double>(T(0,2)), 
-				static_cast<double>(T(1,0)), static_cast<double>(T(1,1)), static_cast<double>(T(1,2)), 
-				static_cast<double>(T(2,0)), static_cast<double>(T(2,1)), static_cast<double>(T(2,2)));
-
-			tf::Quaternion tfqt;
-			tf::Vector3 origin;
-			origin.setValue(
-				static_cast<double>(T(0,3)),
-				static_cast<double>(T(1,3)),
-				static_cast<double>(T(2,3)));
-			tf3d.getRotation(tfqt);
-			laserOdometryTrans.setOrigin(origin);
-			laserOdometryTrans.setRotation(tfqt);
-			laserOdometryTrans.stamp_ = ros::Time().fromSec(timeLaserCloudFullRes );
-			tfBroadcaster.sendTransform(laserOdometryTrans);
-
-			double rxd, ryd, rzd;
-			float tx, ty, tz;
-			//float rx, ry, rz, tx, ty, tz;
-			tf3d.getRPY(rxd,ryd,rzd);
-			tx= static_cast<float>(T(0,3));
-			ty= static_cast<float>(T(1,3));
-			tz= static_cast<float>(T(2,3));
-
-
-			geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(rxd, ryd, rzd);
-
-			laserOdometry.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes );
-			laserOdometry.pose.pose.orientation.x = geoQuat.x;
-			laserOdometry.pose.pose.orientation.y = geoQuat.y;
-			laserOdometry.pose.pose.orientation.z = geoQuat.z;
-			laserOdometry.pose.pose.orientation.w = geoQuat.w;
-			laserOdometry.pose.pose.position.x = tx;
-			laserOdometry.pose.pose.position.y = ty;
-			laserOdometry.pose.pose.position.z = tz;
-			pubLaserOdometry.publish(laserOdometry);
-
+			pose_ = fuser->update(Tmotion,*input_cloud.get());
+			tf::Transform transform;
+			tf::transformEigenToTF(pose_, transform);
+			tfBroadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(),"camera_init","laser_odom"));;
 
 			sensor_msgs::PointCloud2 laserCloudFullRes3;
-			pcl::toROSMsg(*output_cloud, laserCloudFullRes3);
+			pcl::toROSMsg(*input_cloud, laserCloudFullRes3);
 			laserCloudFullRes3.header.stamp = ros::Time().fromSec(timeLaserCloudFullRes);
 			laserCloudFullRes3.header.frame_id = "/camera_init";
 			pubLaserCloudFullRes.publish(laserCloudFullRes3);
